@@ -58,6 +58,8 @@ import org.jellyfin.mobile.setup.ConnectionHelper
 import org.jellyfin.mobile.ui.state.CheckUrlState
 import org.jellyfin.mobile.ui.state.ServerSelectionMode
 import org.jellyfin.mobile.ui.utils.CenterRow
+import org.jellyfin.mobile.utils.Ip2pResolver
+import org.jellyfin.mobile.utils.Ip2pResult
 import org.jellyfin.mobile.utils.Ip4pParser
 import org.jellyfin.mobile.utils.Ip4pResolver
 import org.jellyfin.mobile.utils.Ip4pResult
@@ -70,7 +72,7 @@ fun ServerSelection(
     showExternalConnectionError: Boolean,
     apiClientController: ApiClientController = koinInject(),
     connectionHelper: ConnectionHelper = koinInject(),
-    onConnected: suspend (String, isIp4p: Boolean) -> Unit,
+    onConnected: suspend (String, isIp4p: Boolean, isIp2p: Boolean) -> Unit,
 ) {
     val coroutineScope = rememberCoroutineScope()
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -81,12 +83,20 @@ fun ServerSelection(
     var externalError by remember { mutableStateOf(showExternalConnectionError) }
     var isIp4pMode by remember { mutableStateOf(false) }
     var ip4pHttps by remember { mutableStateOf(false) }
+    var isIp2pMode by remember { mutableStateOf(false) }
+    var ip2pHttps by remember { mutableStateOf(false) }
 
     // Capture IP4P error strings in composable scope for use in onSubmit
     val ip4pErrorInvalidFormat = stringResource(R.string.ip4p_error_invalid_format)
     val ip4pErrorDnsTimeout = stringResource(R.string.ip4p_error_dns_timeout)
     val ip4pErrorNoRecord = stringResource(R.string.ip4p_error_no_record)
     val ip4pErrorDnsFailed = stringResource(R.string.ip4p_error_dns_failed)
+
+    // Capture IP2P error strings
+    val ip2pErrorIpDecode = stringResource(R.string.ip2p_error_ip_decode)
+    val ip2pErrorPortDecode = stringResource(R.string.ip2p_error_port_decode)
+    val ip2pErrorDnsTimeout = stringResource(R.string.ip2p_error_dns_timeout)
+    val ip2pErrorDnsFailed = stringResource(R.string.ip2p_error_dns_failed)
 
     // Preview decoded IP4P address while typing (instant, no network)
     val ip4pPreview = if (isIp4pMode) Ip4pParser.parse(hostname) else null
@@ -97,6 +107,7 @@ fun ServerSelection(
         if (server != null) {
             hostname = server.hostname
             isIp4pMode = server.isIp4p
+            isIp2pMode = server.isIp2p
         }
     }
 
@@ -109,6 +120,7 @@ fun ServerSelection(
                 address = server.hostname,
                 timestamp = server.lastUsedTimestamp,
                 isIp4p = server.isIp4p,
+                isIp2p = server.isIp2p,
             )
         }
 
@@ -129,14 +141,26 @@ fun ServerSelection(
 
     fun onSubmit() {
         externalError = false
-        if (isIp4pMode) {
+        if (isIp2pMode) {
+            // IP2P mode: dual A-record DNS resolution → domain-based URL
+            checkUrlState = CheckUrlState.Pending
+            coroutineScope.launch {
+                when (val result = Ip2pResolver.resolveToUrl(hostname, ip2pHttps)) {
+                    is Ip2pResult.Success -> onConnected(hostname, false, true)
+                    is Ip2pResult.IpDecodeFailed -> checkUrlState = CheckUrlState.Error(ip2pErrorIpDecode)
+                    is Ip2pResult.PortDecodeFailed -> checkUrlState = CheckUrlState.Error(ip2pErrorPortDecode)
+                    is Ip2pResult.DnsTimeout -> checkUrlState = CheckUrlState.Error(ip2pErrorDnsTimeout)
+                    is Ip2pResult.DnsError -> checkUrlState = CheckUrlState.Error(ip2pErrorDnsFailed)
+                }
+            }
+        } else if (isIp4pMode) {
             // IP4P mode: resolve the IP4P address to an IPv4:port URL, then pass
             // the ORIGINAL hostname (not the decoded URL) to onConnected so the
             // domain/IP4P address is stored for re-resolution on reconnect.
             checkUrlState = CheckUrlState.Pending
             coroutineScope.launch {
                 when (val result = Ip4pResolver.resolveToUrl(hostname, ip4pHttps)) {
-                    is Ip4pResult.Success -> onConnected(hostname, true)
+                    is Ip4pResult.Success -> onConnected(hostname, true, false)
                     is Ip4pResult.InvalidFormat -> checkUrlState = CheckUrlState.Error(ip4pErrorInvalidFormat)
                     is Ip4pResult.DnsTimeout -> checkUrlState = CheckUrlState.Error(ip4pErrorDnsTimeout)
                     is Ip4pResult.NoIp4pRecord -> checkUrlState = CheckUrlState.Error(ip4pErrorNoRecord)
@@ -150,7 +174,7 @@ fun ServerSelection(
                 val state = connectionHelper.checkServerUrl(hostname)
                 checkUrlState = state
                 if (state is CheckUrlState.Success) {
-                    onConnected(state.address, false)
+                    onConnected(state.address, false, false)
                 }
             }
         }
@@ -176,13 +200,23 @@ fun ServerSelection(
                     loading = checkUrlState is CheckUrlState.Pending,
                     isIp4pMode = isIp4pMode,
                     ip4pHttps = ip4pHttps,
+                    isIp2pMode = isIp2pMode,
+                    ip2pHttps = ip2pHttps,
                     ip4pPreview = ip4pPreview,
                     onIp4pModeChange = {
                         isIp4pMode = it
+                        if (it) isIp2pMode = false // mutually exclusive
                         externalError = false
                         checkUrlState = CheckUrlState.Unchecked
                     },
                     onIp4pHttpsChange = { ip4pHttps = it },
+                    onIp2pModeChange = {
+                        isIp2pMode = it
+                        if (it) isIp4pMode = false // mutually exclusive
+                        externalError = false
+                        checkUrlState = CheckUrlState.Unchecked
+                    },
+                    onIp2pHttpsChange = { ip2pHttps = it },
                     onTextChange = { value ->
                         externalError = false
                         checkUrlState = CheckUrlState.Unchecked
@@ -202,9 +236,10 @@ fun ServerSelection(
                     onGoBack = {
                         serverSelectionMode = ServerSelectionMode.ADDRESS
                     },
-                    onSelectServer = { url, isIp4p ->
+                    onSelectServer = { url, isIp4p, isIp2p ->
                         hostname = url
                         isIp4pMode = isIp4p
+                        isIp2pMode = isIp2p
                         serverSelectionMode = ServerSelectionMode.ADDRESS
                         onSubmit()
                     },
@@ -222,9 +257,13 @@ private fun AddressSelection(
     loading: Boolean,
     isIp4pMode: Boolean,
     ip4pHttps: Boolean,
+    isIp2pMode: Boolean,
+    ip2pHttps: Boolean,
     ip4pPreview: Ip4pParser.Ip4pData?,
     onIp4pModeChange: (Boolean) -> Unit,
     onIp4pHttpsChange: (Boolean) -> Unit,
+    onIp2pModeChange: (Boolean) -> Unit,
+    onIp2pHttpsChange: (Boolean) -> Unit,
     onTextChange: (String) -> Unit,
     onDiscoveryClick: () -> Unit,
     onSubmit: () -> Unit,
@@ -240,6 +279,7 @@ private fun AddressSelection(
         Ip4pToggle(
             checked = isIp4pMode,
             onCheckedChange = onIp4pModeChange,
+            enabled = !isIp2pMode,
         )
         if (isIp4pMode) {
             HttpsToggle(
@@ -248,6 +288,17 @@ private fun AddressSelection(
             )
         }
         Ip4pPreview(preview = ip4pPreview)
+        Ip2pToggle(
+            checked = isIp2pMode,
+            onCheckedChange = onIp2pModeChange,
+            enabled = !isIp4pMode,
+        )
+        if (isIp2pMode) {
+            HttpsToggle(
+                checked = ip2pHttps,
+                onCheckedChange = onIp2pHttpsChange,
+            )
+        }
         if (!loading) {
             Spacer(modifier = Modifier.height(12.dp))
             StyledTextButton(
@@ -332,6 +383,7 @@ private fun AnimatedErrorText(
 private fun Ip4pToggle(
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
+    enabled: Boolean = true,
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -342,12 +394,40 @@ private fun Ip4pToggle(
         Switch(
             checked = checked,
             onCheckedChange = onCheckedChange,
+            enabled = enabled,
             modifier = Modifier.padding(end = 8.dp),
         )
         Text(
             text = stringResource(R.string.ip4p_toggle_label),
             style = MaterialTheme.typography.body2,
-            color = MaterialTheme.colors.onSurface,
+            color = if (enabled) MaterialTheme.colors.onSurface else MaterialTheme.colors.onSurface.copy(alpha = 0.4f),
+        )
+    }
+}
+
+@Stable
+@Composable
+private fun Ip2pToggle(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    enabled: Boolean = true,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+    ) {
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            enabled = enabled,
+            modifier = Modifier.padding(end = 8.dp),
+        )
+        Text(
+            text = stringResource(R.string.ip2p_toggle_label),
+            style = MaterialTheme.typography.body2,
+            color = if (enabled) MaterialTheme.colors.onSurface else MaterialTheme.colors.onSurface.copy(alpha = 0.4f),
         )
     }
 }
@@ -398,7 +478,7 @@ private fun Ip4pPreview(preview: Ip4pParser.Ip4pData?) {
 private fun ServerDiscoveryList(
     serverSuggestions: SnapshotStateList<ServerSuggestion>,
     onGoBack: () -> Unit,
-    onSelectServer: (String, Boolean) -> Unit,
+    onSelectServer: (String, Boolean, Boolean) -> Unit,
 ) {
     Column {
         Row(
@@ -433,7 +513,7 @@ private fun ServerDiscoveryList(
                 ServerDiscoveryItem(
                     serverSuggestion = server,
                     onClickServer = {
-                        onSelectServer(server.address, server.isIp4p)
+                        onSelectServer(server.address, server.isIp4p, server.isIp2p)
                     },
                 )
             }
@@ -465,6 +545,20 @@ private fun ServerDiscoveryItem(
                             text = "IP4P",
                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                             color = MaterialTheme.colors.primary,
+                            style = MaterialTheme.typography.caption,
+                        )
+                    }
+                }
+                if (serverSuggestion.isIp2p) {
+                    Surface(
+                        color = MaterialTheme.colors.secondary.copy(alpha = 0.15f),
+                        shape = MaterialTheme.shapes.small,
+                        modifier = Modifier.padding(start = 8.dp),
+                    ) {
+                        Text(
+                            text = "IP2P",
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                            color = MaterialTheme.colors.secondary,
                             style = MaterialTheme.typography.caption,
                         )
                     }

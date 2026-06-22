@@ -36,6 +36,9 @@ import org.jellyfin.mobile.setup.ConnectFragment
 import org.jellyfin.mobile.utils.AndroidVersion
 import org.jellyfin.mobile.utils.BackPressInterceptor
 import org.jellyfin.mobile.utils.Constants
+import org.jellyfin.mobile.utils.Ip2pDns
+import org.jellyfin.mobile.utils.Ip2pResolver
+import org.jellyfin.mobile.utils.Ip2pResult
 import org.jellyfin.mobile.utils.Ip4pParser
 import org.jellyfin.mobile.utils.Ip4pResolver
 import org.jellyfin.mobile.utils.Ip4pResult
@@ -118,6 +121,15 @@ class WebViewFragment : Fragment(), BackPressInterceptor, JellyfinWebChromeClien
                         ).show()
                     }
                 }
+                if (server.isIp2p) {
+                    runOnUiThread {
+                        Toast.makeText(
+                            requireContext(),
+                            getString(R.string.ip2p_connected_to, server.hostname),
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    }
+                }
                 requestNoBatteryOptimizations(webViewBinding.root)
             }
 
@@ -189,6 +201,9 @@ class WebViewFragment : Fragment(), BackPressInterceptor, JellyfinWebChromeClien
 
     override fun onDestroyView() {
         super.onDestroyView()
+        if (server.isIp2p) {
+            Ip2pDns.unregister(server.hostname)
+        }
         webViewBinding = null
     }
 
@@ -205,10 +220,19 @@ class WebViewFragment : Fragment(), BackPressInterceptor, JellyfinWebChromeClien
         addJavascriptInterface(externalPlayer, "ExternalPlayer")
         addJavascriptInterface(mediaSegments, "MediaSegments")
 
-        // Resolve IP4P address to a standard URL if applicable.
-        // IP4P addresses encode an IPv4:port pair in an IPv6-like format;
-        // the WebView needs the decoded address to connect.
-        if (server.isIp4p) {
+        // Resolve IP4P/IP2P addresses to standard URLs if applicable.
+        if (server.isIp2p) {
+            // IP2P server: dual A-record DNS resolution → domain-based URL.
+            // The real IP is registered with DnsOverride for OkHttp/WebView.
+            lifecycleScope.launch {
+                val resolved = Ip2pResolver.resolveToUrl(server.hostname)
+                val url = (resolved as? Ip2pResult.Success)?.url ?: server.hostname
+                Timber.i("IP2P WebView: $url")
+                loadUrl(url)
+                postDelayed(timeoutRunnable, Constants.INITIAL_CONNECTION_TIMEOUT)
+                postDelayed(showLoadingContainerRunnable, Constants.SHOW_PROGRESS_BAR_DELAY)
+            }
+        } else if (server.isIp4p) {
             // IP4P server: resolve asynchronously (DNS AAAA lookup for domains,
             // or raw IP4P parse for direct addresses), then load the decoded URL.
             lifecycleScope.launch {
@@ -218,7 +242,7 @@ class WebViewFragment : Fragment(), BackPressInterceptor, JellyfinWebChromeClien
                 postDelayed(showLoadingContainerRunnable, Constants.SHOW_PROGRESS_BAR_DELAY)
             }
         } else {
-            // Non-IP4P server: try fast raw IP4P parse as safety net, then load.
+            // Non-IP4P/IP2P server: try fast raw IP4P parse as safety net, then load.
             val url = Ip4pParser.toUrl(server.hostname) ?: server.hostname
             loadUrl(url)
             postDelayed(timeoutRunnable, Constants.INITIAL_CONNECTION_TIMEOUT)
@@ -287,6 +311,18 @@ class WebViewFragment : Fragment(), BackPressInterceptor, JellyfinWebChromeClien
 
     private fun handleError() {
         connected = false
+
+        // For IP2P servers, re-resolve and retry once.
+        if (server.isIp2p && !ip4pRetried) {
+            ip4pRetried = true
+            Timber.i("IP2P connection failed, retrying with fresh DNS resolution")
+            lifecycleScope.launch {
+                val resolved = Ip2pResolver.resolveToUrl(server.hostname)
+                val url = (resolved as? Ip2pResult.Success)?.url ?: server.hostname
+                webViewBinding?.webView?.loadUrl(url)
+            }
+            return
+        }
 
         // For IP4P servers, re-resolve the hostname and retry once.
         // NAT mappings can change, so a fresh DNS lookup may yield a new address.

@@ -12,7 +12,8 @@ interface ServerDao {
     @Insert(onConflict = OnConflictStrategy.ABORT)
     fun insert(entity: ServerEntity): Long
 
-    fun insert(hostname: String, isIp4p: Boolean = false) = insert(ServerEntity(hostname, isIp4p))
+    fun insert(hostname: String, isIp4p: Boolean = false, isIp2p: Boolean = false) =
+        insert(ServerEntity(hostname, isIp4p, isIp2p))
 
     @Query("SELECT * FROM $TABLE_NAME WHERE id = :id")
     fun getServer(id: Long): ServerEntity?

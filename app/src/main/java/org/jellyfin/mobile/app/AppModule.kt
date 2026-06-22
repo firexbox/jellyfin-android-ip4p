@@ -26,6 +26,7 @@ import coil3.ImageLoader
 import kotlinx.coroutines.channels.Channel
 import okhttp3.OkHttpClient
 import org.jellyfin.mobile.MainViewModel
+import org.jellyfin.mobile.utils.Ip2pDns
 import org.jellyfin.mobile.bridge.MediaSegments
 import org.jellyfin.mobile.bridge.NativePlayer
 import org.jellyfin.mobile.downloads.DownloadManager
@@ -62,7 +63,11 @@ private const val TS_SEARCH_PACKETS = 1800
 
 val applicationModule = module {
     single { AppPreferences(androidApplication()) }
-    single { OkHttpClient() }
+    single {
+        OkHttpClient.Builder()
+            .dns(Ip2pDns)
+            .build()
+    }
     single { ImageLoader(androidApplication()) }
     single { PermissionRequestHelper() }
     single { RemoteVolumeProvider(get()) }

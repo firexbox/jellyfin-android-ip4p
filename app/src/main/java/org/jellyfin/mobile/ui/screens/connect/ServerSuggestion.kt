@@ -14,6 +14,10 @@ data class ServerSuggestion(
      * Whether this server was added as an IP4P address.
      */
     val isIp4p: Boolean = false,
+    /**
+     * Whether this server was added as an IP2P address.
+     */
+    val isIp2p: Boolean = false,
 ) {
     enum class Type {
         DISCOVERED,

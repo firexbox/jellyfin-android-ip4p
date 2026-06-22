@@ -21,12 +21,15 @@ data class ServerEntity(
     val lastUsedTimestamp: Long,
     @ColumnInfo(name = IS_IP4P, defaultValue = "0")
     val isIp4p: Boolean = false,
+    @ColumnInfo(name = IS_IP2P, defaultValue = "0")
+    val isIp2p: Boolean = false,
 ) : Parcelable {
-    constructor(hostname: String, isIp4p: Boolean = false) : this(
+    constructor(hostname: String, isIp4p: Boolean = false, isIp2p: Boolean = false) : this(
         id = 0,
         hostname = hostname,
         lastUsedTimestamp = System.currentTimeMillis(),
         isIp4p = isIp4p,
+        isIp2p = isIp2p,
     )
 
     companion object Key {
@@ -35,5 +38,6 @@ data class ServerEntity(
         const val HOSTNAME = "hostname"
         const val LAST_USED_TIMESTAMP = "last_used_timestamp"
         const val IS_IP4P = "is_ip4p"
+        const val IS_IP2P = "is_ip2p"
     }
 }

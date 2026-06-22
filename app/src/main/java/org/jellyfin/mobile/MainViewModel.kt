@@ -28,8 +28,8 @@ class MainViewModel(
         }
     }
 
-    suspend fun switchServer(hostname: String, isIp4p: Boolean = false) {
-        apiClientController.setupServer(hostname, isIp4p)
+    suspend fun switchServer(hostname: String, isIp4p: Boolean = false, isIp2p: Boolean = false) {
+        apiClientController.setupServer(hostname, isIp4p, isIp2p)
         refreshServer()
         refreshUser()
     }
